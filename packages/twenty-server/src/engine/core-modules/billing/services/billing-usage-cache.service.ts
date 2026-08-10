@@ -50,6 +50,17 @@ export class BillingUsageCacheService {
     );
   }
 
+  async incrementAvailableCredits(
+    workspaceId: string,
+    periodStart: Date | string,
+    grantedCredits: number,
+  ): Promise<number> {
+    return this.billingUsageCacheStorage.incrBy(
+      buildBillingUsageAvailableCreditsCacheKey(workspaceId, periodStart),
+      grantedCredits,
+    );
+  }
+
   async invalidateAvailableCredits(
     workspaceId: string,
     periodStart: Date | string,

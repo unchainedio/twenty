@@ -5,7 +5,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { isDefined } from 'twenty-shared/utils';
 import { WorkspaceActivationStatus } from 'twenty-shared/workspace';
 
-import { differenceInDays } from 'date-fns';
 import { ClickHouseService } from 'src/database/clickHouse/clickHouse.service';
 import { formatDateTimeForClickHouse } from 'src/database/clickHouse/clickHouse.util';
 import { CoreEntityCacheService } from 'src/engine/core-entity-cache/services/core-entity-cache.service';
@@ -15,14 +14,16 @@ import {
 } from 'src/engine/core-modules/billing/billing.exception';
 import { NO_BILLING_SUBSCRIPTION } from 'src/engine/core-modules/billing/constants/no-billing-subscription.constant';
 import { type BillingResourceCreditUsageDTO } from 'src/engine/core-modules/billing/dtos/billing-resource-credit-usage.dto';
-import { BillingCustomerEntity } from 'src/engine/core-modules/billing/entities/billing-customer.entity';
 import { BillingSubscriptionEntity } from 'src/engine/core-modules/billing/entities/billing-subscription.entity';
 import { BillingProductKey } from 'src/engine/core-modules/billing/enums/billing-product-key.enum';
 import { SubscriptionStatus } from 'src/engine/core-modules/billing/enums/billing-subscription-status.enum';
+import { BillingCreditGrantService } from 'src/engine/core-modules/billing/services/billing-credit-grant.service';
 import { BillingSubscriptionItemService } from 'src/engine/core-modules/billing/services/billing-subscription-item.service';
 import { BillingSubscriptionService } from 'src/engine/core-modules/billing/services/billing-subscription.service';
 import { BillingUsageCacheService } from 'src/engine/core-modules/billing/services/billing-usage-cache.service';
 import { BillingUsageCapService } from 'src/engine/core-modules/billing/services/billing-usage-cap.service';
+import { getBillingSubscriptionPeriod } from 'src/engine/core-modules/billing/utils/get-billing-subscription-period.util';
+import { getTrialResourceCreditAllowanceMicro } from 'src/engine/core-modules/billing/utils/get-trial-resource-credit-allowance.util';
 import { TwentyConfigService } from 'src/engine/core-modules/twenty-config/twenty-config.service';
 import { type WorkspaceEntity } from 'src/engine/core-modules/workspace/workspace.entity';
 import { InjectWorkspaceScopedRepository } from 'src/engine/twenty-orm/workspace-scoped-repository/inject-workspace-scoped-repository.decorator';
@@ -37,8 +38,7 @@ type UsageSumRow = {
 export class BillingUsageService {
   protected readonly logger = new Logger(BillingUsageService.name);
   constructor(
-    @InjectWorkspaceScopedRepository(BillingCustomerEntity)
-    private readonly billingCustomerRepository: WorkspaceScopedRepository<BillingCustomerEntity>,
+    private readonly billingCreditGrantService: BillingCreditGrantService,
     private readonly billingSubscriptionService: BillingSubscriptionService,
     private readonly twentyConfigService: TwentyConfigService,
     private readonly billingSubscriptionItemService: BillingSubscriptionItemService,
@@ -87,7 +87,8 @@ export class BillingUsageService {
       );
     }
 
-    const { periodStart, periodEnd } = this.getSubscriptionPeriod(subscription);
+    const { periodStart, periodEnd } =
+      getBillingSubscriptionPeriod(subscription);
 
     return [
       await this.buildResourceCreditUsage(
@@ -123,11 +124,8 @@ export class BillingUsageService {
         ? item.freeTrialQuantity
         : item.creditAmount;
 
-    const billingCustomer = await this.billingCustomerRepository.findOne(
-      workspaceId,
-      { where: {} },
-    );
-    const rolloverCredits = billingCustomer?.creditBalanceMicro ?? 0;
+    const rolloverCredits =
+      await this.billingCreditGrantService.getActiveCreditsMicro(workspaceId);
 
     return {
       productKey: item.productKey,
@@ -138,28 +136,6 @@ export class BillingUsageService {
       rolloverCredits,
       totalGrantedCredits: grantedCredits + rolloverCredits,
       unitPriceCents: item.unitPriceCents,
-    };
-  }
-
-  private getSubscriptionPeriod(subscription: BillingSubscriptionEntity): {
-    periodStart: Date;
-    periodEnd: Date;
-  } {
-    const isTrialing =
-      subscription.status === SubscriptionStatus.Trialing &&
-      isDefined(subscription.trialStart) &&
-      isDefined(subscription.trialEnd);
-
-    if (isTrialing) {
-      return {
-        periodStart: subscription.trialStart!,
-        periodEnd: subscription.trialEnd!,
-      };
-    }
-
-    return {
-      periodStart: subscription.currentPeriodStart,
-      periodEnd: subscription.currentPeriodEnd,
     };
   }
 
@@ -191,11 +167,8 @@ export class BillingUsageService {
 
     const resourceUsageCap = this.getResourceUsageCap(subscription);
 
-    const { creditBalanceMicro: creditBalance } =
-      await this.billingCustomerRepository.findOneOrFail(workspaceId, {
-        select: { creditBalanceMicro: true },
-        where: {},
-      });
+    const creditBalance =
+      await this.billingCreditGrantService.getActiveCreditsMicro(workspaceId);
 
     const usage = await this.getCurrentPeriodCreditsUsed(
       subscription.workspaceId,
@@ -205,26 +178,27 @@ export class BillingUsageService {
     return resourceUsageCap + creditBalance - usage;
   }
 
+  getTrialResourceUsageCap(subscription: BillingSubscriptionEntity): number {
+    return getTrialResourceCreditAllowanceMicro({
+      trialStart: subscription.trialStart,
+      trialEnd: subscription.trialEnd,
+      trialWithCreditCardDurationInDays: this.twentyConfigService.get(
+        'BILLING_FREE_TRIAL_WITH_CREDIT_CARD_DURATION_IN_DAYS',
+      ),
+      allowanceWithCreditCardMicro: this.twentyConfigService.get(
+        'BILLING_FREE_WORKFLOW_CREDITS_FOR_TRIAL_PERIOD_WITH_CREDIT_CARD',
+      ),
+      allowanceWithoutCreditCardMicro: this.twentyConfigService.get(
+        'BILLING_FREE_WORKFLOW_CREDITS_FOR_TRIAL_PERIOD_WITHOUT_CREDIT_CARD',
+      ),
+    });
+  }
+
   getResourceUsageCap(subscription: BillingSubscriptionEntity): number {
     const isInFreeTrial = subscription.status === SubscriptionStatus.Trialing;
 
     if (isInFreeTrial) {
-      const trialDuration =
-        isDefined(subscription.trialEnd) && isDefined(subscription.trialStart)
-          ? differenceInDays(subscription.trialEnd, subscription.trialStart)
-          : 0;
-
-      const trialWithCreditCardDuration = this.twentyConfigService.get(
-        'BILLING_FREE_TRIAL_WITH_CREDIT_CARD_DURATION_IN_DAYS',
-      );
-
-      return trialDuration === trialWithCreditCardDuration
-        ? this.twentyConfigService.get(
-            'BILLING_FREE_WORKFLOW_CREDITS_FOR_TRIAL_PERIOD_WITH_CREDIT_CARD',
-          )
-        : this.twentyConfigService.get(
-            'BILLING_FREE_WORKFLOW_CREDITS_FOR_TRIAL_PERIOD_WITHOUT_CREDIT_CARD',
-          );
+      return this.getTrialResourceUsageCap(subscription);
     }
 
     const resourceCreditItem = subscription.billingSubscriptionItems.find(
@@ -371,10 +345,15 @@ export class BillingUsageService {
     }
   }
 
-  async getCurrentPeriodCreditsUsed(
+  // Returns null when usage could not be read. ClickHouseService.select
+  // swallows query errors and returns [], but a bare sum() aggregate always
+  // yields exactly one row, so an empty result means the read failed rather
+  // than "nothing was used". Callers that hand out credits must not confuse
+  // the two.
+  async getCurrentPeriodCreditsUsedOrNull(
     workspaceId: string,
     periodStart: Date,
-  ): Promise<number> {
+  ): Promise<number | null> {
     const query = `
       SELECT sum(creditsUsedMicro) AS total
       FROM usageEvent
@@ -387,9 +366,59 @@ export class BillingUsageService {
       periodStart: formatDateTimeForClickHouse(periodStart),
     });
 
+    if (rows.length === 0) {
+      return null;
+    }
+
     const rawTotal = rows[0]?.total ?? 0;
     const total = typeof rawTotal === 'string' ? Number(rawTotal) : rawTotal;
 
     return Number.isFinite(total) ? total : 0;
+  }
+
+  // Sums by event timestamp rather than by the stamped periodStart dimension.
+  // At a period transition the subscription's currentPeriodStart has already
+  // moved on, so an equality match on periodStart would read the new period
+  // and report a period that has barely started as unused.
+  async getCreditsUsedBetweenOrNull(
+    workspaceId: string,
+    from: Date,
+    to: Date,
+  ): Promise<number | null> {
+    const query = `
+      SELECT sum(creditsUsedMicro) AS total
+      FROM usageEvent
+      WHERE workspaceId = {workspaceId:String}
+        AND timestamp >= {from:DateTime64(3)}
+        AND timestamp < {to:DateTime64(3)}
+    `;
+
+    const rows = await this.clickHouseService.select<UsageSumRow>(query, {
+      workspaceId,
+      from: formatDateTimeForClickHouse(from),
+      to: formatDateTimeForClickHouse(to),
+    });
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    const rawTotal = rows[0]?.total ?? 0;
+    const total = typeof rawTotal === 'string' ? Number(rawTotal) : rawTotal;
+
+    return Number.isFinite(total) ? total : 0;
+  }
+
+  // Fails open: an unreadable usage total must never block a paying workspace.
+  async getCurrentPeriodCreditsUsed(
+    workspaceId: string,
+    periodStart: Date,
+  ): Promise<number> {
+    return (
+      (await this.getCurrentPeriodCreditsUsedOrNull(
+        workspaceId,
+        periodStart,
+      )) ?? 0
+    );
   }
 }
