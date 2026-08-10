@@ -41,11 +41,11 @@ export class BillingCreditRolloverService {
     nextAllowanceMicro,
   }: ProcessRolloverParams): Promise<void> {
     const usageMicro =
-      await this.billingUsageService.getCreditsUsedBetweenOrNull(
+      await this.billingUsageService.getCreditsUsedBetweenOrNull({
         workspaceId,
-        closingPeriodStart,
-        closingPeriodEnd,
-      );
+        from: closingPeriodStart,
+        to: closingPeriodEnd,
+      });
 
     // Reading usage as zero when the query failed would roll a full unused
     // allowance over to every workspace invoiced during the outage. Stripe
@@ -60,11 +60,11 @@ export class BillingCreditRolloverService {
     }
 
     const closingGrants =
-      await this.billingCreditGrantService.findGrantsLiveDuringPeriod(
+      await this.billingCreditGrantService.findGrantsLiveDuringPeriod({
         workspaceId,
-        closingPeriodStart,
-        closingPeriodEnd,
-      );
+        periodStart: closingPeriodStart,
+        periodEnd: closingPeriodEnd,
+      });
 
     const rolloverCapMultiplier = this.twentyConfigService.get(
       'BILLING_ROLLOVER_TOTAL_CAP_MULTIPLIER',
@@ -82,11 +82,11 @@ export class BillingCreditRolloverService {
       rolloverCapMicro: (rolloverCapMultiplier - 1) * nextAllowanceMicro,
     });
 
-    await this.billingCreditGrantService.closeGrantsAtPeriodEnd(
+    await this.billingCreditGrantService.closeGrantsAtPeriodEnd({
       workspaceId,
-      closingGrants.map((grant) => grant.id),
-      closingPeriodEnd,
-    );
+      grantIds: closingGrants.map((grant) => grant.id),
+      periodEnd: closingPeriodEnd,
+    });
 
     for (const carryForwardGrant of carryForwardGrants) {
       await this.billingCreditService.grantCredits({
@@ -105,6 +105,11 @@ export class BillingCreditRolloverService {
         }),
       });
     }
+
+    // Closing the old grants moved the balance on its own, and a period where
+    // everything was spent carries nothing forward, so neither step is
+    // guaranteed to have refreshed the mirror.
+    await this.billingCreditService.syncMirrorBalance(workspaceId);
   }
 }
 

@@ -139,7 +139,7 @@ import { AddListViewTypeFastInstanceCommand } from 'src/database/commands/upgrad
 import { AddListWidgetViewTypeFastInstanceCommand } from 'src/database/commands/upgrade-version-command/2-30/2-30-instance-command-fast-1786227282471-add-list-widget-view-type';
 import { AddCallRecordingWidgetTypesFastInstanceCommand } from 'src/database/commands/upgrade-version-command/2-29/2-29-instance-command-fast-1786009374684-add-call-recording-widget-types';
 import { CreateBillingCreditGrantTableFastInstanceCommand } from 'src/database/commands/upgrade-version-command/2-31/2-31-instance-command-fast-1786368742015-create-billing-credit-grant-table';
-import { BackfillCreditBalanceIntoGrantsFastInstanceCommand } from 'src/database/commands/upgrade-version-command/2-31/2-31-instance-command-fast-1786368742016-backfill-credit-balance-into-grants';
+import { BackfillCreditBalanceIntoGrantsSlowInstanceCommand } from 'src/database/commands/upgrade-version-command/2-31/2-31-instance-command-slow-1786368742016-backfill-credit-balance-into-grants';
 
 export const INSTANCE_COMMANDS = [
   AddViewFieldGroupIdIndexOnViewFieldFastInstanceCommand,
@@ -281,5 +281,5 @@ export const INSTANCE_COMMANDS = [
   AddCallRecordingWidgetTypesFastInstanceCommand,
   AddListWidgetViewTypeFastInstanceCommand,
   CreateBillingCreditGrantTableFastInstanceCommand,
-  BackfillCreditBalanceIntoGrantsFastInstanceCommand,
+  BackfillCreditBalanceIntoGrantsSlowInstanceCommand,
 ];

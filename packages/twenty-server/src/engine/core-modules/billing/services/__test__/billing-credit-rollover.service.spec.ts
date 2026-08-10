@@ -34,7 +34,10 @@ describe('BillingCreditRolloverService', () => {
     findGrantsLiveDuringPeriod: jest.Mock;
     closeGrantsAtPeriodEnd: jest.Mock;
   }>;
-  let billingCreditService: jest.Mocked<{ grantCredits: jest.Mock }>;
+  let billingCreditService: jest.Mocked<{
+    grantCredits: jest.Mock;
+    syncMirrorBalance: jest.Mock;
+  }>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -55,7 +58,10 @@ describe('BillingCreditRolloverService', () => {
         },
         {
           provide: BillingCreditService,
-          useValue: { grantCredits: jest.fn().mockResolvedValue(null) },
+          useValue: {
+            grantCredits: jest.fn().mockResolvedValue(null),
+            syncMirrorBalance: jest.fn().mockResolvedValue(undefined),
+          },
         },
         {
           provide: TwentyConfigService,
@@ -100,11 +106,11 @@ describe('BillingCreditRolloverService', () => {
 
       expect(
         billingUsageService.getCreditsUsedBetweenOrNull,
-      ).toHaveBeenCalledWith(
+      ).toHaveBeenCalledWith({
         workspaceId,
-        CLOSING_PERIOD_START,
-        CLOSING_PERIOD_END,
-      );
+        from: CLOSING_PERIOD_START,
+        to: CLOSING_PERIOD_END,
+      });
     });
 
     it('grants nothing when the whole allowance was spent', async () => {
@@ -115,6 +121,18 @@ describe('BillingCreditRolloverService', () => {
       await service.processRolloverOnPeriodTransition(baseParams);
 
       expect(billingCreditService.grantCredits).not.toHaveBeenCalled();
+    });
+
+    it('refreshes the mirror balance even when nothing carried forward', async () => {
+      billingUsageService.getCreditsUsedBetweenOrNull.mockResolvedValue(
+        ALLOWANCE,
+      );
+
+      await service.processRolloverOnPeriodTransition(baseParams);
+
+      expect(billingCreditService.syncMirrorBalance).toHaveBeenCalledWith(
+        workspaceId,
+      );
     });
 
     it('caps the rollover so the new period totals at most twice the allowance', async () => {
@@ -170,11 +188,11 @@ describe('BillingCreditRolloverService', () => {
 
       expect(
         billingCreditGrantService.closeGrantsAtPeriodEnd,
-      ).toHaveBeenCalledWith(
+      ).toHaveBeenCalledWith({
         workspaceId,
-        ['compensation_1'],
-        CLOSING_PERIOD_END,
-      );
+        grantIds: ['compensation_1'],
+        periodEnd: CLOSING_PERIOD_END,
+      });
     });
 
     it('gives every carried grant a replay-safe idempotency key', async () => {
@@ -196,6 +214,7 @@ describe('BillingCreditRolloverService', () => {
       expect(
         billingCreditGrantService.closeGrantsAtPeriodEnd,
       ).not.toHaveBeenCalled();
+      expect(billingCreditService.syncMirrorBalance).not.toHaveBeenCalled();
     });
 
     it('carries trial credits into the first paid period', async () => {

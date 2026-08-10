@@ -4,8 +4,11 @@ import { Test, type TestingModule } from '@nestjs/testing';
 
 import { getRepositoryToken } from '@nestjs/typeorm';
 
+import { Not } from 'typeorm';
+
 import { BillingException } from 'src/engine/core-modules/billing/billing.exception';
 import { BillingSubscriptionItemEntity } from 'src/engine/core-modules/billing/entities/billing-subscription-item.entity';
+import { SubscriptionStatus } from 'src/engine/core-modules/billing/enums/billing-subscription-status.enum';
 import { BillingUsageCapService } from 'src/engine/core-modules/billing/services/billing-usage-cap.service';
 
 const workspaceId = 'ws_123';
@@ -49,6 +52,20 @@ describe('BillingUsageCapService', () => {
         { id: 'item_1' },
         { hasReachedCurrentPeriodCap: true },
       );
+    });
+
+    it("looks only at the workspace's non-canceled resource credit items", async () => {
+      await service.setSubscriptionItemHasReachedCap(workspaceId, true);
+
+      expect(billingSubscriptionItemRepository.find).toHaveBeenCalledWith({
+        where: {
+          billingSubscription: {
+            workspaceId,
+            status: Not(SubscriptionStatus.Canceled),
+          },
+          billingProduct: { metadata: expect.anything() },
+        },
+      });
     });
 
     it('throws when the workspace has no resource credit item', async () => {

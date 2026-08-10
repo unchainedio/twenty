@@ -139,6 +139,20 @@ export class BillingCreditService {
     return this.billingCreditGrantService.getActiveCreditsMicro(workspaceId);
   }
 
+  // Writes the ledger balance back onto the mirror column. Callers that change
+  // the ledger without going through grantCredits (the period transition
+  // closing grants) have to call this or the mirror goes stale.
+  async syncMirrorBalance(workspaceId: string): Promise<void> {
+    const activeCreditsMicro =
+      await this.billingCreditGrantService.getActiveCreditsMicro(workspaceId);
+
+    await this.billingCustomerRepository.update(
+      workspaceId,
+      {},
+      { creditBalanceMicro: activeCreditsMicro },
+    );
+  }
+
   // Keeps everything that reads a credit balance consistent with the ledger:
   // the mirror column, the Redis counter that gates usage, the flag that drives
   // the "no more credits" banner, and the cached subscription the front reads.
@@ -149,14 +163,7 @@ export class BillingCreditService {
     workspaceId: string;
     availableDeltaMicro: number;
   }): Promise<void> {
-    const activeCreditsMicro =
-      await this.billingCreditGrantService.getActiveCreditsMicro(workspaceId);
-
-    await this.billingCustomerRepository.update(
-      workspaceId,
-      {},
-      { creditBalanceMicro: activeCreditsMicro },
-    );
+    await this.syncMirrorBalance(workspaceId);
 
     const subscription =
       await this.billingSubscriptionService.getCurrentBillingSubscription({

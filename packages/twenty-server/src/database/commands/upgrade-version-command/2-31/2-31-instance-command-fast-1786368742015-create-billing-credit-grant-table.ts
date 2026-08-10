@@ -14,12 +14,27 @@ export class CreateBillingCreditGrantTableFastInstanceCommand
   implements FastInstanceCommand
 {
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // Billing entities only exist when billing is enabled, so an instance
+    // without billing must not grow a billing table its entity set has no
+    // counterpart for.
+    const isBillingSchemaPresent = await queryRunner.query(
+      `SELECT 1 FROM pg_tables WHERE schemaname = 'core' AND tablename = 'billingCustomer'`,
+    );
+
+    if (isBillingSchemaPresent.length === 0) {
+      return;
+    }
+
+    await queryRunner.query(
+      `DO $$ BEGIN CREATE TYPE "core"."billingCreditGrant_type_enum" AS ENUM ('ROLLOVER', 'ONBOARDING_REWARD', 'COMPENSATION', 'PARTNERSHIP', 'MANUAL_ADJUSTMENT'); EXCEPTION WHEN duplicate_object THEN null; END $$`,
+    );
+
     await queryRunner.query(
       `CREATE TABLE IF NOT EXISTS "core"."billingCreditGrant" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "workspaceId" uuid NOT NULL,
         "amountMicro" bigint NOT NULL,
-        "type" text NOT NULL,
+        "type" "core"."billingCreditGrant_type_enum" NOT NULL,
         "effectiveAt" TIMESTAMP WITH TIME ZONE NOT NULL,
         "expiresAt" TIMESTAMP WITH TIME ZONE NOT NULL,
         "revokedAt" TIMESTAMP WITH TIME ZONE,

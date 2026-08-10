@@ -30,7 +30,11 @@ export class BillingCreditGrantEntity extends WorkspaceRelatedEntity {
   @Column({ nullable: false, type: 'bigint', transformer: bigintTransformer })
   amountMicro: number;
 
-  @Column({ nullable: false, type: 'text' })
+  @Column({
+    nullable: false,
+    type: 'enum',
+    enum: Object.values(BillingCreditGrantType),
+  })
   type: BillingCreditGrantType;
 
   @Column({ nullable: false, type: 'timestamptz' })

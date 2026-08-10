@@ -1,7 +1,7 @@
 import { useMutation } from '@apollo/client/react';
+import { isNonEmptyString } from '@sniptt/guards';
 import { styled } from '@linaria/react';
 import { useLingui } from '@lingui/react/macro';
-import { isNonEmptyString } from 'twenty-shared/utils';
 import { useState } from 'react';
 import { IconX } from 'twenty-ui/icon';
 import { Button, IconButton } from 'twenty-ui/input';
@@ -9,10 +9,8 @@ import { themeCssVariables } from 'twenty-ui/theme-constants';
 import { H2Title } from 'twenty-ui/typography';
 
 import { useApolloAdminClient } from '@/settings/admin-panel/apollo/hooks/useApolloAdminClient';
-import {
-  CREDIT_GRANT_TYPE_LABELS,
-  GRANTABLE_CREDIT_GRANT_TYPES,
-} from '@/settings/admin-panel/constants/CreditGrantLabels';
+import { CREDIT_GRANT_TYPE_LABELS } from '@/settings/admin-panel/constants/CreditGrantTypeLabels';
+import { GRANTABLE_CREDIT_GRANT_TYPES } from '@/settings/admin-panel/constants/GrantableCreditGrantTypes';
 import { GRANT_WORKSPACE_CREDITS } from '@/settings/admin-panel/graphql/mutations/grantWorkspaceCredits';
 import { GET_WORKSPACE_BILLING_ADMIN_PANEL } from '@/settings/admin-panel/graphql/queries/getWorkspaceBillingAdminPanel';
 import { Select } from '@/ui/input/components/Select';

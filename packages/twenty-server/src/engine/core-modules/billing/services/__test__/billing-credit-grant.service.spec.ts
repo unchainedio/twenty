@@ -4,6 +4,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 
 import { BillingException } from 'src/engine/core-modules/billing/billing.exception';
 import { BillingCreditGrantEntity } from 'src/engine/core-modules/billing/entities/billing-credit-grant.entity';
+import { BillingCustomerEntity } from 'src/engine/core-modules/billing/entities/billing-customer.entity';
 import { BillingCreditGrantType } from 'src/engine/core-modules/billing/enums/billing-credit-grant-type.enum';
 import { BillingCreditGrantService } from 'src/engine/core-modules/billing/services/billing-credit-grant.service';
 import { getWorkspaceScopedRepositoryToken } from 'src/engine/twenty-orm/workspace-scoped-repository/get-workspace-scoped-repository-token.util';
@@ -29,7 +30,9 @@ describe('BillingCreditGrantService', () => {
     find: jest.Mock;
     update: jest.Mock;
     createQueryBuilder: jest.Mock;
+    exists: jest.Mock;
   }>;
+  let billingCustomerRepository: jest.Mocked<{ findOne: jest.Mock }>;
   let queryBuilder: { getRawOne: jest.Mock } & Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -60,6 +63,13 @@ describe('BillingCreditGrantService', () => {
             find: jest.fn().mockResolvedValue([]),
             update: jest.fn().mockResolvedValue({ affected: 1 }),
             createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+            exists: jest.fn().mockResolvedValue(true),
+          },
+        },
+        {
+          provide: getWorkspaceScopedRepositoryToken(BillingCustomerEntity),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue({ creditBalanceMicro: 0 }),
           },
         },
       ],
@@ -68,6 +78,9 @@ describe('BillingCreditGrantService', () => {
     service = module.get<BillingCreditGrantService>(BillingCreditGrantService);
     repository = module.get(
       getWorkspaceScopedRepositoryToken(BillingCreditGrantEntity),
+    );
+    billingCustomerRepository = module.get(
+      getWorkspaceScopedRepositoryToken(BillingCustomerEntity),
     );
   });
 
@@ -171,15 +184,54 @@ describe('BillingCreditGrantService', () => {
 
       expect(await service.getActiveCreditsMicro(workspaceId)).toBe(0);
     });
+
+    it('throws rather than serving a balance it cannot represent exactly', async () => {
+      queryBuilder.getRawOne.mockResolvedValue({
+        total: String(Number.MAX_SAFE_INTEGER) + '0',
+      });
+
+      await expect(service.getActiveCreditsMicro(workspaceId)).rejects.toThrow(
+        BillingException,
+      );
+    });
+  });
+
+  describe('getSpendableCreditsMicro', () => {
+    it('reads the ledger once the workspace has a grant', async () => {
+      repository.exists.mockResolvedValue(true);
+
+      expect(await service.getSpendableCreditsMicro(workspaceId)).toBe(
+        3_000_000,
+      );
+      expect(billingCustomerRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the mirror column before the backfill has run', async () => {
+      repository.exists.mockResolvedValue(false);
+      billingCustomerRepository.findOne.mockResolvedValue({
+        creditBalanceMicro: 200_000_000,
+      });
+
+      expect(await service.getSpendableCreditsMicro(workspaceId)).toBe(
+        200_000_000,
+      );
+    });
+
+    it('returns zero when the workspace has neither a grant nor a customer', async () => {
+      repository.exists.mockResolvedValue(false);
+      billingCustomerRepository.findOne.mockResolvedValue(null);
+
+      expect(await service.getSpendableCreditsMicro(workspaceId)).toBe(0);
+    });
   });
 
   describe('closeGrantsAtPeriodEnd', () => {
     it('pulls expiries back to the period end', async () => {
-      await service.closeGrantsAtPeriodEnd(
+      await service.closeGrantsAtPeriodEnd({
         workspaceId,
-        ['grant_1'],
-        EXPIRES_AT,
-      );
+        grantIds: ['grant_1'],
+        periodEnd: EXPIRES_AT,
+      });
 
       expect(repository.update).toHaveBeenCalledWith(
         workspaceId,
@@ -189,7 +241,11 @@ describe('BillingCreditGrantService', () => {
     });
 
     it('does not query anything when there is no grant to close', async () => {
-      await service.closeGrantsAtPeriodEnd(workspaceId, [], EXPIRES_AT);
+      await service.closeGrantsAtPeriodEnd({
+        workspaceId,
+        grantIds: [],
+        periodEnd: EXPIRES_AT,
+      });
 
       expect(repository.update).not.toHaveBeenCalled();
     });

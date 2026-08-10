@@ -1,37 +1,46 @@
-import { QueryRunner } from 'typeorm';
+import { DataSource, QueryRunner } from 'typeorm';
 
 import { RegisteredInstanceCommand } from 'src/engine/core-modules/upgrade/decorators/registered-instance-command.decorator';
-import { FastInstanceCommand } from 'src/engine/core-modules/upgrade/interfaces/fast-instance-command.interface';
+import { SlowInstanceCommand } from 'src/engine/core-modules/upgrade/interfaces/slow-instance-command.interface';
 
 const BACKFILL_IDEMPOTENCY_KEY_PREFIX = 'backfill-credit-balance:';
 
 // Turns the single billingCustomer.creditBalanceMicro number into one grant per
-// workspace. Deliberately fast rather than slow: available credits start being
-// read from the ledger in this same release, so a workspace whose balance had
-// not moved yet would report zero rollover credits and could be capped early.
-// Slow commands only run behind --include-slow, which would leave that window
-// open. The write is one set-based insert over one row per paying workspace, so
-// it belongs on the fast path.
+// workspace. Until this runs, BillingCreditGrantService falls back to the
+// mirror column for workspaces that have no grant yet, so credit balances stay
+// correct whether or not the upgrade was invoked with --include-slow.
 //
 // The column keeps being written as a mirror of the ledger until it is dropped
 // in a later release, so this stays reversible.
-@RegisteredInstanceCommand('2.31.0', 1786368742016)
-export class BackfillCreditBalanceIntoGrantsFastInstanceCommand
-  implements FastInstanceCommand
+@RegisteredInstanceCommand('2.31.0', 1786368742016, { type: 'slow' })
+export class BackfillCreditBalanceIntoGrantsSlowInstanceCommand
+  implements SlowInstanceCommand
 {
-  public async up(queryRunner: QueryRunner): Promise<void> {
-    const tableExists = await queryRunner.query(
-      `SELECT 1 FROM pg_tables WHERE schemaname = 'core' AND tablename = 'billingCreditGrant'`,
+  async runDataMigration(dataSource: DataSource): Promise<void> {
+    // Nothing to move on an instance without billing: neither the ledger nor
+    // the column it mirrors exists there.
+    const presentTables = await dataSource.query(
+      `SELECT tablename FROM pg_tables
+        WHERE schemaname = 'core'
+          AND tablename IN ('billingCreditGrant', 'billingCustomer', 'billingSubscription')`,
     );
 
-    if (tableExists.length === 0) {
+    const presentTableNames = new Set(
+      presentTables.map((row: { tablename: string }) => row.tablename),
+    );
+
+    if (
+      !presentTableNames.has('billingCreditGrant') ||
+      !presentTableNames.has('billingCustomer') ||
+      !presentTableNames.has('billingSubscription')
+    ) {
       return;
     }
 
     // Expiry follows the workspace's current period, but never lands in the
     // past: a backfilled grant that expires on creation would silently delete
     // the balance it was meant to preserve.
-    await queryRunner.query(
+    await dataSource.query(
       `INSERT INTO "core"."billingCreditGrant" (
         "workspaceId", "amountMicro", "type", "effectiveAt", "expiresAt", "reason", "idempotencyKey"
       )
@@ -61,6 +70,10 @@ export class BackfillCreditBalanceIntoGrantsFastInstanceCommand
       ON CONFLICT ("idempotencyKey") DO NOTHING`,
       [BACKFILL_IDEMPOTENCY_KEY_PREFIX],
     );
+  }
+
+  public async up(_queryRunner: QueryRunner): Promise<void> {
+    return;
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

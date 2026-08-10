@@ -10,6 +10,7 @@ import {
   BillingExceptionCode,
 } from 'src/engine/core-modules/billing/billing.exception';
 import { BillingCreditGrantEntity } from 'src/engine/core-modules/billing/entities/billing-credit-grant.entity';
+import { BillingCustomerEntity } from 'src/engine/core-modules/billing/entities/billing-customer.entity';
 import { type BillingCreditGrantType } from 'src/engine/core-modules/billing/enums/billing-credit-grant-type.enum';
 import { InjectWorkspaceScopedRepository } from 'src/engine/twenty-orm/workspace-scoped-repository/inject-workspace-scoped-repository.decorator';
 import { WorkspaceScopedRepository } from 'src/engine/twenty-orm/workspace-scoped-repository/workspace-scoped-repository';
@@ -44,6 +45,8 @@ export class BillingCreditGrantService {
   constructor(
     @InjectWorkspaceScopedRepository(BillingCreditGrantEntity)
     private readonly billingCreditGrantRepository: WorkspaceScopedRepository<BillingCreditGrantEntity>,
+    @InjectWorkspaceScopedRepository(BillingCustomerEntity)
+    private readonly billingCustomerRepository: WorkspaceScopedRepository<BillingCustomerEntity>,
   ) {}
 
   // Returns null when idempotencyKey has already been used, so callers can tell
@@ -129,15 +132,53 @@ export class BillingCreditGrantService {
 
     const total = Number(result?.total ?? 0);
 
-    return Number.isFinite(total) ? total : 0;
+    // Rounding a balance would hand out or withhold credits that were never
+    // granted, so refuse rather than serve a number we cannot represent.
+    if (!Number.isSafeInteger(total)) {
+      throw new BillingException(
+        `Credit balance for workspace ${workspaceId} is not a safe integer (${total})`,
+        BillingExceptionCode.BILLING_CREDIT_AMOUNT_INVALID,
+      );
+    }
+
+    return total;
+  }
+
+  // What a workspace can actually spend, which is the ledger except in the
+  // window between this release deploying and its backfill running: until a
+  // workspace has any grant at all, its balance still only exists in the
+  // mirror column. Remove this along with creditBalanceMicro.
+  async getSpendableCreditsMicro(
+    workspaceId: string,
+    at: Date = new Date(),
+  ): Promise<number> {
+    const hasAnyGrant = await this.billingCreditGrantRepository.exists(
+      workspaceId,
+      { where: {} },
+    );
+
+    if (hasAnyGrant) {
+      return this.getActiveCreditsMicro(workspaceId, at);
+    }
+
+    const billingCustomer = await this.billingCustomerRepository.findOne(
+      workspaceId,
+      { select: { creditBalanceMicro: true }, where: {} },
+    );
+
+    return billingCustomer?.creditBalanceMicro ?? 0;
   }
 
   // Grants that were spendable at any point during the given period.
-  async findGrantsLiveDuringPeriod(
-    workspaceId: string,
-    periodStart: Date,
-    periodEnd: Date,
-  ): Promise<BillingCreditGrantEntity[]> {
+  async findGrantsLiveDuringPeriod({
+    workspaceId,
+    periodStart,
+    periodEnd,
+  }: {
+    workspaceId: string;
+    periodStart: Date;
+    periodEnd: Date;
+  }): Promise<BillingCreditGrantEntity[]> {
     return this.billingCreditGrantRepository.find(workspaceId, {
       where: {
         revokedAt: IsNull(),
@@ -151,11 +192,15 @@ export class BillingCreditGrantService {
   // Enforces the one-grant-per-period invariant at the point where periods
   // actually roll: whatever a writer guessed for expiresAt, a grant never
   // outlives the period it was carried forward from.
-  async closeGrantsAtPeriodEnd(
-    workspaceId: string,
-    grantIds: string[],
-    periodEnd: Date,
-  ): Promise<void> {
+  async closeGrantsAtPeriodEnd({
+    workspaceId,
+    grantIds,
+    periodEnd,
+  }: {
+    workspaceId: string;
+    grantIds: string[];
+    periodEnd: Date;
+  }): Promise<void> {
     if (grantIds.length === 0) {
       return;
     }

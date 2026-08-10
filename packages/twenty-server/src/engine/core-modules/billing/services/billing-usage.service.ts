@@ -125,7 +125,9 @@ export class BillingUsageService {
         : item.creditAmount;
 
     const rolloverCredits =
-      await this.billingCreditGrantService.getActiveCreditsMicro(workspaceId);
+      await this.billingCreditGrantService.getSpendableCreditsMicro(
+        workspaceId,
+      );
 
     return {
       productKey: item.productKey,
@@ -168,7 +170,9 @@ export class BillingUsageService {
     const resourceUsageCap = this.getResourceUsageCap(subscription);
 
     const creditBalance =
-      await this.billingCreditGrantService.getActiveCreditsMicro(workspaceId);
+      await this.billingCreditGrantService.getSpendableCreditsMicro(
+        workspaceId,
+      );
 
     const usage = await this.getCurrentPeriodCreditsUsed(
       subscription.workspaceId,
@@ -380,11 +384,15 @@ export class BillingUsageService {
   // At a period transition the subscription's currentPeriodStart has already
   // moved on, so an equality match on periodStart would read the new period
   // and report a period that has barely started as unused.
-  async getCreditsUsedBetweenOrNull(
-    workspaceId: string,
-    from: Date,
-    to: Date,
-  ): Promise<number | null> {
+  async getCreditsUsedBetweenOrNull({
+    workspaceId,
+    from,
+    to,
+  }: {
+    workspaceId: string;
+    from: Date;
+    to: Date;
+  }): Promise<number | null> {
     const query = `
       SELECT sum(creditsUsedMicro) AS total
       FROM usageEvent

@@ -8,16 +8,14 @@ import { SubscriptionStatus } from 'src/engine/core-modules/billing/enums/billin
 export const getBillingSubscriptionPeriod = (
   subscription: BillingSubscriptionEntity,
 ): { periodStart: Date; periodEnd: Date } => {
-  const isTrialing =
-    subscription.status === SubscriptionStatus.Trialing &&
-    isDefined(subscription.trialStart) &&
-    isDefined(subscription.trialEnd);
+  const { trialStart, trialEnd } = subscription;
 
-  if (isTrialing) {
-    return {
-      periodStart: subscription.trialStart as Date,
-      periodEnd: subscription.trialEnd as Date,
-    };
+  if (
+    subscription.status === SubscriptionStatus.Trialing &&
+    isDefined(trialStart) &&
+    isDefined(trialEnd)
+  ) {
+    return { periodStart: trialStart, periodEnd: trialEnd };
   }
 
   return {

@@ -12,10 +12,8 @@ import { type ThemeColor } from 'twenty-ui/theme';
 import { themeCssVariables } from 'twenty-ui/theme-constants';
 
 import { useApolloAdminClient } from '@/settings/admin-panel/apollo/hooks/useApolloAdminClient';
-import {
-  CREDIT_GRANT_TYPE_COLORS,
-  CREDIT_GRANT_TYPE_LABELS,
-} from '@/settings/admin-panel/constants/CreditGrantLabels';
+import { CREDIT_GRANT_TYPE_COLORS } from '@/settings/admin-panel/constants/CreditGrantTypeColors';
+import { CREDIT_GRANT_TYPE_LABELS } from '@/settings/admin-panel/constants/CreditGrantTypeLabels';
 import { REVOKE_WORKSPACE_CREDIT_GRANT } from '@/settings/admin-panel/graphql/mutations/revokeWorkspaceCreditGrant';
 import { GET_WORKSPACE_BILLING_ADMIN_PANEL } from '@/settings/admin-panel/graphql/queries/getWorkspaceBillingAdminPanel';
 import { useNumberFormat } from '@/localization/hooks/useNumberFormat';
